@@ -23,10 +23,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up fake secret (for demonstration)
+      - name: Load secrets (for demonstration)
+        env:
+          DEMO_SECRET: ${{ secrets.DEMO_SECRET }}
+          DEMO_AWS_KEY: ${{ secrets.DEMO_AWS_KEY }}
         run: |
-          echo "DEMO_SECRET=super-secret-api-key-12345" >> $GITHUB_ENV
-          echo "DEMO_AWS_KEY=AKIAIOSFODNN7EXAMPLE" >> $GITHUB_ENV
+          echo "DEMO_SECRET=$DEMO_SECRET" >> $GITHUB_ENV
+          echo "DEMO_AWS_KEY=$DEMO_AWS_KEY" >> $GITHUB_ENV
 
       - name: Configure Git (VULNERABLE PATTERN 1)
         run: |

