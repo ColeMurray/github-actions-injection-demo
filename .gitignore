@@ -1,0 +1,12 @@
+# Ignore sensitive files (if any were accidentally created)
+*.log
+*.secret
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

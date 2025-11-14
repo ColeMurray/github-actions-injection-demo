@@ -1,0 +1,103 @@
+name: "SECURE: Proper Input Validation"
+
+# ✅ This workflow demonstrates proper security controls
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'Package name to update (e.g., @prefect/ui-library)'
+        required: true
+        type: string
+      package_version:
+        description: 'Package version (e.g., 1.2.3)'
+        required: true
+        type: string
+
+jobs:
+  secure-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up fake secret (for demonstration)
+        run: |
+          echo "DEMO_SECRET=super-secret-api-key-12345" >> $GITHUB_ENV
+          echo "DEMO_AWS_KEY=AKIAIOSFODNN7EXAMPLE" >> $GITHUB_ENV
+
+      - name: "✅ STEP 1: Validate Inputs (REQUIRED FOR SECURITY)"
+        run: |
+          echo "🔍 Validating package name: $PACKAGE_NAME"
+
+          # Validate package name format (NPM naming rules)
+          if ! echo "$PACKAGE_NAME" | grep -qE '^@?[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)?$'; then
+            echo "❌ ERROR: Invalid package name format"
+            echo "   Package name: $PACKAGE_NAME"
+            echo "   Expected format: @scope/package-name or package-name"
+            echo "   Allowed characters: a-z, A-Z, 0-9, _, -, /, @"
+            exit 1
+          fi
+
+          echo "✅ Package name validation passed"
+
+          echo "🔍 Validating version: $PACKAGE_VERSION"
+
+          # Validate semantic version format
+          if ! echo "$PACKAGE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
+            echo "❌ ERROR: Invalid version format"
+            echo "   Version: $PACKAGE_VERSION"
+            echo "   Expected format: X.Y.Z (semantic version)"
+            echo "   Examples: 1.2.3, 2.0.0-beta.1, 3.1.4+build.123"
+            exit 1
+          fi
+
+          echo "✅ Version validation passed"
+          echo ""
+          echo "✅ All input validation checks passed!"
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+
+      - name: "✅ STEP 2: Configure Git (validated inputs)"
+        run: |
+          # Now safe to use because inputs are validated
+          git config user.name "$ACTOR"
+          git config user.email "$ACTOR@users.noreply.github.com"
+        env:
+          ACTOR: ${{ github.actor }}
+
+      - name: "✅ STEP 3: Create Branch (validated inputs)"
+        run: |
+          git checkout -b "update-${PACKAGE_NAME}-${PACKAGE_VERSION}"
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+
+      - name: "✅ STEP 4: Update Package (validated inputs)"
+        run: |
+          echo "Updating package: ${PACKAGE_NAME}"
+          echo "To version: ${PACKAGE_VERSION}"
+          echo "This is now safe because validation rejected malicious input"
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+
+      - name: "✅ STEP 5: Create Commit (validated inputs)"
+        run: |
+          git add -A
+          git commit -m "Update ${PACKAGE_NAME} to ${PACKAGE_VERSION}" || echo "No changes to commit"
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+
+      - name: Summary
+        run: |
+          echo "✅ Secure workflow completed successfully"
+          echo "📦 Package: ${PACKAGE_NAME}"
+          echo "🔖 Version: ${PACKAGE_VERSION}"
+          echo "🔒 Secrets remain protected: $DEMO_SECRET"
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
