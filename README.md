@@ -253,6 +253,39 @@ This vulnerability allows attackers to:
 
 **This is a CRITICAL security issue when using direct interpolation.**
 
+### ⚠️ Extra Dangerous: Secrets Used Directly in `run:` Commands
+
+A particularly dangerous pattern is using `${{ secrets.SECRET }}` directly in `run:` commands:
+
+```yaml
+# EXTREMELY VULNERABLE - DO NOT DO THIS
+- name: Deploy
+  run: |
+    curl -X POST "https://api.example.com/deploy" \
+      -H "Authorization: Bearer ${{ secrets.API_KEY }}" \
+      -d "region=${{ inputs.region }}"
+```
+
+**Why this is worse:**
+- The secret is expanded at workflow generation time (same as inputs)
+- An attacker can inject code that **references the secret directly**: `${{ secrets.API_KEY }}`
+- Both the untrusted input AND the secret become part of the shell script
+- Attack example: `region` = `us-east-1&leaked_token=${{ secrets.API_KEY }}`
+
+**The safe pattern:**
+```yaml
+# SAFER - Use env: block for BOTH inputs AND secrets
+- name: Deploy
+  env:
+    API_KEY: ${{ secrets.API_KEY }}
+    REGION: ${{ inputs.region }}
+  run: |
+    # Validate REGION first
+    curl -X POST "https://api.example.com/deploy" \
+      -H "Authorization: Bearer $API_KEY" \
+      -d "region=$REGION"
+```
+
 ---
 
 ## The Correct Fix: Defense in Depth
@@ -339,15 +372,17 @@ Only allow trusted users to trigger workflows:
 ### ❌ What Doesn't Work
 
 1. **Direct interpolation alone** - Highly vulnerable
-2. **Trusting user input** - Always validate
-3. **Relying on one control** - Use multiple security layers
+2. **Using secrets directly in `run:` commands** - Extremely dangerous with untrusted input
+3. **Trusting user input** - Always validate
+4. **Relying on one control** - Use multiple security layers
 
 ### 🎯 The Bottom Line
 
 - **Direct `${{ }}` interpolation is vulnerable** ❌
+- **Using `${{ secrets.* }}` directly in `run:` is extremely dangerous** ❌❌
 - **Environment variables provide documented protection** ✅
 - **Input validation is still required** ✅
-- **Use both for complete security** ✅✅
+- **Use env: for BOTH inputs AND secrets** ✅✅
 
 ---
 
